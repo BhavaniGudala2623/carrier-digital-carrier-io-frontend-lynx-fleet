@@ -1,0 +1,11 @@
+# Prevent indexing of images
+User-agent: Googlebot-Image
+Disallow: /
+
+# Block Google's news crawler
+User-agent: Googlebot-news
+Disallow: /
+
+# Don't index routes related to authentication
+User-agent: *
+Disallow: /auth/

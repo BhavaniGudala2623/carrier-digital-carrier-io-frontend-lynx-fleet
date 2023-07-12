@@ -1,0 +1,1 @@
+export { BatteryNotificationsWidget } from './BatteryNotificationsWidget';

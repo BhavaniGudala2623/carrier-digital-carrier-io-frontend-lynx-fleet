@@ -1,0 +1,36 @@
+.soc-meta-data_container {
+  margin: 10px 16px;
+  display: flex;
+  flex-direction: column;
+  .title,
+  .icon-range,
+  .divider {
+    margin-bottom: 10px;
+  }
+  .icon-count-range,
+  .icon-count-caption {
+    display: flex;
+    align-items: center;
+    margin-bottom: 10px;
+    .count {
+      margin-left: 7px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .range,
+    .caption {
+      color: #000;
+      opacity: 0.6;
+      margin-left: 10px;
+    }
+    .normal-card,
+    .high-card {
+      color: #424242;
+      opacity: 1;
+    }
+    .disabled {
+      opacity: 0.38;
+    }
+  }
+}

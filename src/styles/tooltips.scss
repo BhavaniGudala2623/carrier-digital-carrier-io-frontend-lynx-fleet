@@ -1,0 +1,21 @@
+.carrier-io-tooltip-arrow {
+  // TODO the color is incorrect from the FDS theme
+  // color: theme.palette.primary.main,
+  color: #270adc;
+}
+
+.carrier-io-tooltip-tooltip {
+  // TODO the backgroundColor is incorrect from the FDS theme
+  // background-color: theme.palette.info.main,
+  background-color: #270adc;
+  color: #fff;
+  font-size: 14px;
+  padding: 8px;
+  // webkit-filter: initial;
+}
+
+.carrier-io-tooltip-tooltip-placement-right {
+  & .MuiTooltip-arrow {
+    margin-left: -0.71em !important;
+  }
+}

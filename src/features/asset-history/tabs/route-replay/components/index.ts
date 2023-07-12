@@ -1,0 +1,1 @@
+export { AssetHistoryRouteTab } from './AssetHistoryRouteTab';

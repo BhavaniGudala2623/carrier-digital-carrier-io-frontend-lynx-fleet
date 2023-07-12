@@ -1,0 +1,1 @@
+export { MultiSwitch } from './MultiSwitch';

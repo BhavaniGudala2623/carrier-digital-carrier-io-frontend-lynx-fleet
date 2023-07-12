@@ -1,0 +1,42 @@
+.header {
+  position: relative;
+  min-height: 56px;
+  display: flex;
+  align-items: center;
+
+  &__progress-bar {
+    width: 100%;
+    position: absolute;
+    left: 0;
+    top: 0;
+    z-index: 2;
+  }
+}
+
+.header.MuiContainer-root {
+  z-index: 1;
+  max-width: 100%;
+  padding: 0;
+}
+
+.app-bar-right {
+  display: flex;
+
+  &__settings {
+    display: flex;
+    position: relative;
+    align-items: center;
+  }
+
+  &__menu {
+    display: flex;
+    position: relative;
+    align-items: center;
+    padding: 20px 20px 20px 14px;
+  }
+}
+
+.app-bar-left {
+  display: flex;
+  padding: 14px 12px 14px;
+}

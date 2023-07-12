@@ -1,0 +1,1 @@
+export { EventHistoryChart } from './EventHistoryChart';

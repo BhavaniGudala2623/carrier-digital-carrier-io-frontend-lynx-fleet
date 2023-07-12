@@ -1,0 +1,1 @@
+export { GroupsActionsRenderer } from './GroupsActionsRenderer';

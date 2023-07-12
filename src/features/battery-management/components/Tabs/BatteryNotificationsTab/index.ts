@@ -1,0 +1,1 @@
+export { BatteryNotificationsTab } from './BatteryNotificationsTab';

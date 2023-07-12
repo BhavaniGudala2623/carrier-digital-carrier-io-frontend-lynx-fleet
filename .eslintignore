@@ -1,0 +1,11 @@
+.circleci
+.hysky
+.vscode
+build
+cicd_scripts
+docs
+legacy
+node_modules
+cypress.config.ts
+vite.config.ts
+webpack.config.ts

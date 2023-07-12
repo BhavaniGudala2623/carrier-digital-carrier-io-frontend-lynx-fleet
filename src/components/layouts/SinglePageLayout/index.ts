@@ -1,0 +1,1 @@
+export { SinglePageLayout } from './SinglePageLayout';

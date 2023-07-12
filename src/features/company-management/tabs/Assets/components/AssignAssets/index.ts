@@ -1,0 +1,1 @@
+export { AssignAssetsDialog } from './AssignAssetsDialog';

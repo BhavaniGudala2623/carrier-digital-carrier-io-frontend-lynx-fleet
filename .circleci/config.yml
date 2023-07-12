@@ -1,0 +1,572 @@
+version: 2.1
+
+parameters:
+  environment:
+    type: string
+    default: dev
+  jira-project-key:
+    type: string
+    default: "LYNXFLT"
+  main-branch:
+    type: string
+    default: develop
+  channel-name:
+    type: string
+    default: cicd-carrierio-frontend-lynx
+  fingerprint:
+    type: string
+    default: 1b:01:1a:70:75:ca:7a:0e:9b:82:d3:d5:47:10:d9:ef
+  workflow_controller:
+    default: false
+    type: boolean
+  premerge-build:
+    type: boolean
+    default: false
+  repository-name:
+    type: string
+    default: 'carrier-io-lynx-fleet'
+
+orbs:
+  aws-cli: circleci/aws-cli@2.0.6
+  slack: circleci/slack@4.2.0
+  aws-auth: cardig/aws-auth@0.2.1
+  aws-ssm: cardig/aws-ssm@0.3.0
+  aws-s3: circleci/aws-s3@3.0.0
+  semver: cardig/semver@1.0.1
+  sonarcloud: sonarsource/sonarcloud@1.0.2
+  priv-aws-auth: cardig/priv-aws-auth@0.0.2
+  priv-cache: cardig/priv-cache@0.0.2
+  priv-synopsis: cardig/priv-synopsis@2.1.0
+  priv-workflow: cardig/priv-workflow@1.0.0
+  jira: cardig/priv-jira@2.0.0
+
+commands:
+  cached-checkout:
+    steps:
+      - when:
+          condition: << pipeline.git.branch >>
+          steps:
+            - priv-cache/cached-checkout:
+                branch-name: <<pipeline.git.branch>>
+      - when:
+          condition: << pipeline.git.tag >>
+          steps:
+            - priv-cache/cached-checkout:
+                tag-name: <<pipeline.git.tag>>
+  fail-tag-deployment:
+    steps:
+      - when:
+          condition: << pipeline.git.tag >>
+          steps:
+            - add_ssh_keys:
+                fingerprints:
+                  - <<pipeline.parameters.fingerprint>>
+                when: on_fail
+            - run:
+                command: |
+                  new_tag="<< pipeline.git.tag >>-failed"
+                  echo "Pushing Tag :     $new_tag"
+                  git config --global user.email "circleci@carrier.io"
+                  git config --global user.name "circleci"
+                  git tag -a $new_tag $CIRCLE_SHA1 -m 'tag pushed from circleci'
+                  git push origin $new_tag
+                  echo "Tag pushed!"
+                name: Pushed Failed Tag
+                when: on_fail
+                working_directory: .circleci
+            - run:
+                command: |
+                  echo "Deleting prior tag"
+                  git push --delete origin << pipeline.git.tag >>
+                name: Delete Failed Trigger Tag
+                when: on_fail
+                working_directory: .circleci
+
+jobs:
+  sonar:
+    docker:
+      - image: cimg/node:14.19.1
+    resource_class: << parameters.resource_class >>
+    parameters:
+      resource_class:
+        type: string
+        default: medium # [ other options are small medium+ large xlarge 2xlarge 2xlarge+]
+    steps:
+      - cached-checkout
+      - priv-workflow/job-prep:
+          premerge-build: <<pipeline.parameters.premerge-build>>
+          workspace-area: ~/
+      - priv-cache/cached-package-install:
+          cache-key-version: 2
+      - sonarcloud/scan
+      - slack/notify:
+          event: fail
+          mentions: <!here>
+          channel: <<pipeline.parameters.channel-name>>
+          template: basic_fail_1
+  # cypress-tests:
+  #   docker:
+  #     - image: cypress/base:16.13.2
+  #   resource_class: << parameters.resource_class >>
+  #   parameters:
+  #     resource_class:
+  #       type: string
+  #       default: xlarge # [ other options are small medium+ large xlarge 2xlarge 2xlarge+]
+  #   steps:
+  #     - cached-checkout
+  #     - priv-workflow/job-prep:
+  #         premerge-build: <<pipeline.parameters.premerge-build>>
+  #         workspace-area: ~/
+  #     - priv-cache/cached-package-install:
+  #         cache-key-version: 2
+  #     - run: ./cicd_scripts/set_node_options.sh
+  #     - run: npm install -g wait-on
+  #     - run: yarn start & wait-on http://localhost:3000 && yarn test:e2e
+  #     - slack/notify:
+  #         event: fail
+  #         mentions: <!here>
+  #         channel: <<pipeline.parameters.channel-name>>
+  #         template: basic_fail_1
+  lint-test:
+    executor: aws-cli/default
+    parameters:
+      env:
+        type: string
+    steps:
+      - cached-checkout
+      - priv-workflow/job-prep:
+          premerge-build: <<pipeline.parameters.premerge-build>>
+          workspace-area: ~/
+      - priv-cache/cached-package-install:
+          cache-key-version: 2
+      - run:
+          command: npm run lint:fix
+          name: Lint fix
+      - run:
+          command: npm run lint
+          name: Lint Check
+      - slack/notify:
+          event: fail
+          mentions: <!here>
+          channel: <<pipeline.parameters.channel-name>>
+          template: basic_fail_1
+  build-lynx:
+    executor: aws-cli/default
+    parameters:
+      env:
+        type: string
+    resource_class: xlarge
+    steps:
+      - cached-checkout
+      - priv-workflow/job-prep:
+          premerge-build: <<pipeline.parameters.premerge-build>>
+      - priv-cache/cached-package-install:
+          cache-key-version: 2
+      - run: ./cicd_scripts/set_version_env.sh
+      - run:
+          command: |
+            if [[ "<<parameters.env>>" == "prod" ]]; then
+              echo "Using prod specific build"
+              yarn build
+            else
+              echo "Using non prod build"
+              yarn build
+            fi
+          name: Make Build
+      - persist_to_workspace:
+          paths:
+            - project/build
+            - workspace/*
+          root: ~/
+      - slack/notify:
+          event: fail
+          mentions: <!here>
+          channel: <<pipeline.parameters.channel-name>>
+          template: basic_fail_1
+  deploy-lynx:
+    executor: aws-cli/default
+    parameters:
+      env:
+        type: string
+    steps:
+      - cached-checkout
+      - priv-workflow/job-prep:
+          premerge-build: <<pipeline.parameters.premerge-build>>
+          workspace-area: ~/
+      - run:
+          command: |
+            # Define the name of the CloudFormation Stack
+            infra_stack_name="<<parameters.env>>-fleetlynxcarrierio-static-site"
+
+            # Compose the SSM Parameter name to lookup for the S3 Bucket
+            ssm_param_bucket="/Lynx/registry/${infra_stack_name}/BucketName"
+            echo "Resolving S3 Bucket name from Parameter: ${ssm_param_bucket}"
+
+            # Lookup the S3 Bucket name from the SSM Parameter Store
+            s3Bucket=s3://$(aws ssm get-parameter \
+              --name "${ssm_param_bucket}" \
+              --query 'Parameter.Value' \
+              --output text \
+              | sed 's/^"//g; s/"$//g')
+            echo "Using <<parameters.env>> specific S3 Bucket: ${s3Bucket}"
+
+            aws s3 sync build $s3Bucket \
+              --delete \
+              --cache-control public,max-age=31536000,immutable \
+              --exclude "locales/*" \
+              --exclude "*.html"
+
+            aws s3 sync build/locales $s3Bucket/locales \
+              --delete \
+              --cache-control public,max-age=0,must-revalidate \
+              --content-type application/json \
+              --metadata-directive REPLACE
+
+            aws s3 sync build $s3Bucket \
+              --exclude "*" \
+              --include "*.html" \
+              --cache-control public,max-age=0,must-revalidate \
+              --content-type text/html \
+              --metadata-directive REPLACE
+          name: S3 Sync
+      - run:
+          command: |
+            # Define the name of the CloudFormation Stack
+            infra_stack_name="<<parameters.env>>-fleetlynxcarrierio-static-site"
+
+            # Compose the SSM Parameter name to lookup for the CloudFront
+            # Distribution ID
+            ssm_param_cf_distid="/Lynx/registry/${infra_stack_name}/DistributionId"
+            echo "Resolving CloudFront Distribution from Parameter: ${ssm_param_cf_distid}"
+
+            # Lookup the CloudFront Distribution ID from the SSM Parameter
+            # Store
+            cdnId=$(aws ssm get-parameter \
+              --name "${ssm_param_cf_distid}" \
+              --query 'Parameter.Value' \
+              --output text \
+              | sed 's/^"//g; s/"$//g')
+            echo "Using <<parameters.env>> specific CloudFront Distribution: ${cdnId}"
+            aws cloudfront create-invalidation \
+              --distribution-id $cdnId \
+              --paths "/*"
+          name: CDN Invalidate
+      - slack/notify:
+          event: fail
+          mentions: <!here>
+          channel: <<pipeline.parameters.channel-name>>
+          template: basic_fail_1
+
+workflows:
+  # dev deployment
+  branch-deployer:
+    jobs:
+      - priv-workflow/check-pr:
+          name: Check PR Status
+          filters:
+            branches:
+              ignore:
+                - <<pipeline.parameters.main-branch>>
+      - priv-aws-auth/setup-credentials: &setup-credentials
+          name: Setup Credentials
+          context:
+            - AWS_DIGITAL_DEPLOYMENT_USER
+            - SLACK
+          environment: dev
+          account: celsius
+          channel-name: <<pipeline.parameters.channel-name>>
+          pipeline-number: <<pipeline.number>>
+          repository-name: <<pipeline.parameters.repository-name>>
+          ca-logins:
+            - priv-aws-auth/ca-login:
+                domain: 'carrier'
+                repository: '@carrier-io'
+                domain_owner: '652821702517'
+            - priv-aws-auth/ca-login:
+                domain: 'carrier'
+                repository: '@carrier'
+                domain_owner: '652821702517'
+            - priv-aws-auth/ca-login:
+                domain: 'carrier'
+                repository: 'npm-store'
+                domain_owner: '652821702517'
+      - build-lynx:
+          name: Build dev
+          env: dev
+          context:
+            - 'SLACK'
+          requires:
+            - Setup Credentials
+      - sonar:
+          name: Sonar Scan
+          resource_class: large
+          context:
+            - 'SONAR'
+            - 'SLACK'
+          requires:
+            - Build dev
+      - lint-test:
+          name: Lint Test
+          context: 'SLACK'
+          env: dev
+          requires:
+            - Build dev
+      # - cypress-tests:
+      #     name: Cypress Test
+      #     context: 'SLACK'
+      #     requires:
+      #       - Build dev
+      - deploy-lynx:
+          name: Deploy to dev
+          env: dev
+          filters:
+            branches:
+              only:
+                - <<pipeline.parameters.main-branch>>
+            #    - /^feature\/.*/
+          context:
+            - 'SLACK'
+          requires:
+            # - Cypress Test
+            - Lint Test
+      - jira/get-and-post: &jira-post
+          name: Update Jira dev
+          jira-project-key: << pipeline.parameters.jira-project-key >>
+          deploy-environment: dev
+          commit-history-type: branch
+          filters:
+            branches:
+              only: <<pipeline.parameters.main-branch>>
+          requires:
+            - Deploy to dev
+    when:
+      and:
+        - not: << pipeline.git.tag >>
+        - not: << pipeline.parameters.premerge-build >>
+  premerge-deployer:
+    jobs:
+      - priv-aws-auth/setup-credentials:
+          <<: *setup-credentials
+      - priv-workflow/sync-main:
+          name: Merge in <<pipeline.parameters.main-branch>>
+          fingerprint: <<pipeline.parameters.fingerprint>>
+          main-branch: <<pipeline.parameters.main-branch>>
+          requires:
+            - Setup Credentials
+      - build-lynx:
+          name: Build dev
+          env: dev
+          context:
+            - 'SLACK'
+          requires:
+            - Merge in <<pipeline.parameters.main-branch>>
+      - sonar:
+          name: Sonar Scan
+          resource_class: large
+          context:
+            - 'SONAR'
+            - 'SLACK'
+          requires:
+            - Build dev
+      - lint-test:
+          name: Lint Test
+          context: 'SLACK'
+          env: dev
+          requires:
+            - Build dev
+      # - cypress-tests:
+      #     name: Cypress Test
+      #     context: 'SLACK'
+      #     requires:
+      #       - Build dev
+    when:
+      and:
+        - not: << pipeline.git.tag >>
+        - << pipeline.parameters.premerge-build >>
+  tag-router:
+    jobs:
+      - priv-workflow/tag-routing: &tag-routing
+          context: SLACK
+          filters:
+            tags:
+              only: /rc-(major|minor|patch)-([1-9][0-9]+|[0-9])\.([1-9][0-9]+|[0-9])\.([1-9][0-9]+|[0-9])/
+          name: Handle RC Tag
+          environment: qa
+          channel-name: <<pipeline.parameters.channel-name>>
+          pipeline-number: <<pipeline.number>>
+          fingerprint: <<pipeline.parameters.fingerprint>>
+          route: tag
+      - priv-workflow/tag-routing:
+          <<: *tag-routing
+          filters:
+            tags:
+              only: /hotfix-(qa|preprod|prod)-([1-9][0-9]+|[0-9])\.([1-9][0-9]+|[0-9])\.([1-9][0-9]+|[0-9])/
+          name: Handle Hotfix Tag
+          environment: <<pipeline.parameters.environment>>
+          route: hotfix-tag
+      - priv-workflow/tag-routing:
+          <<: *tag-routing
+          filters:
+            tags:
+              only: /([1-9][0-9]+|[0-9])\.([1-9][0-9]+|[0-9])\.([1-9][0-9]+|[0-9])-qa\+([0-9]*)\.([a-f0-9]){7}/
+          name: Handle QA Tag
+          environment: qa
+          route: controller
+      - priv-workflow/tag-routing:
+          <<: *tag-routing
+          filters:
+            tags:
+              only: /([1-9][0-9]+|[0-9])\.([1-9][0-9]+|[0-9])\.([1-9][0-9]+|[0-9])-preprod\+([0-9]*)\.([a-f0-9]){7}/
+          name: Handle PreProd Tag
+          environment: preprod
+          route: controller
+      - priv-workflow/tag-routing:
+          <<: *tag-routing
+          filters:
+            tags:
+              only: /([1-9][0-9]+|[0-9])\.([1-9][0-9]+|[0-9])\.([1-9][0-9]+|[0-9])-prod\+([0-9]*)\.([a-f0-9]){7}/
+          name: Handle Prod Tag
+          environment: prod
+          route: controller
+    when:
+      and:
+        - << pipeline.git.tag >>
+        - not: << pipeline.parameters.workflow_controller >>
+  # qa to prod deployment
+  tag-deployer:
+    jobs:
+      - priv-aws-auth/setup-credentials:
+          <<: *setup-credentials
+          environment: <<pipeline.parameters.environment>>
+          filters:
+            tags:
+              only: /([1-9][0-9]+|[0-9])\.([1-9][0-9]+|[0-9])\.([1-9][0-9]+|[0-9])-<< pipeline.parameters.environment >>.*/
+      - build-lynx:
+          name: Build <<pipeline.parameters.environment>>
+          env: <<pipeline.parameters.environment>>
+          filters:
+            tags:
+              only: /([1-9][0-9]+|[0-9])\.([1-9][0-9]+|[0-9])\.([1-9][0-9]+|[0-9])-<< pipeline.parameters.environment >>.*/
+          context:
+            - 'SLACK'
+          post-steps:
+            - fail-tag-deployment
+          requires:
+            - Setup Credentials
+      - priv-synopsis/blackduck-scan:
+          name: Black Duck Scan
+          context:
+            - SYNOPSIS_BLACKDUCK
+            - SLACK
+          filters:
+            tags:
+              only: /([1-9][0-9]+|[0-9])\.([1-9][0-9]+|[0-9])\.([1-9][0-9]+|[0-9])-qa\+([0-9]*)\.([a-f0-9]){7}/
+          channel-name: <<pipeline.parameters.channel-name>>
+          workspace-path: ~/
+          scan-prep:
+            - priv-cache/cached-package-install:
+                cache-key-version: 2
+          requires:
+            - Build <<pipeline.parameters.environment>>
+      - priv-synopsis/polaris-scan:
+          name: Polaris Scan
+          context:
+            - SYNOPSIS_POLARIS
+            - SLACK
+          filters:
+            tags:
+              only: /([1-9][0-9]+|[0-9])\.([1-9][0-9]+|[0-9])\.([1-9][0-9]+|[0-9])-qa\+([0-9]*)\.([a-f0-9]){7}/
+          channel-name: <<pipeline.parameters.channel-name>>
+          workspace-path: ~/
+          scan-prep:
+            - priv-cache/cached-package-install:
+                cache-key-version: 2
+          requires:
+            - Build <<pipeline.parameters.environment>>
+      - deploy-lynx:
+          name: Deploy to <<pipeline.parameters.environment>>
+          env: <<pipeline.parameters.environment>>
+          filters:
+            tags:
+              only: /([1-9][0-9]+|[0-9])\.([1-9][0-9]+|[0-9])\.([1-9][0-9]+|[0-9])-<< pipeline.parameters.environment >>.*/
+          context:
+            - 'SLACK'
+          requires:
+            - Build <<pipeline.parameters.environment>>
+      - jira/get-and-post:
+          name: Update Jira <<pipeline.parameters.environment>>
+          jira-project-key: << pipeline.parameters.jira-project-key >>
+          commit-history-type: tag
+          deploy-environment: <<pipeline.parameters.environment>>
+          filters:
+            tags:
+              only: /([1-9][0-9]+|[0-9])\.([1-9][0-9]+|[0-9])\.([1-9][0-9]+|[0-9])-<< pipeline.parameters.environment >>.*/
+          requires:
+            - Deploy to <<pipeline.parameters.environment>>
+      - slack/on-hold: &slack-on-hold
+          name: Preprod Approval Notification
+          context: "SLACK"
+          mentions: "<!here>" ##### Use <@SLACKUID> for users. Otherwise <!here> <!channel>
+          branch_pattern: <<pipeline.parameters.main-branch>>
+          channel: <<pipeline.parameters.channel-name>>
+          requires:
+            - Deploy to <<pipeline.parameters.environment>>
+          filters:
+            tags:
+              only: /([1-9][0-9]+|[0-9])\.([1-9][0-9]+|[0-9])\.([1-9][0-9]+|[0-9])-qa\+([0-9]*)\.([a-f0-9]){7}/
+      - approval:
+          filters:
+            tags:
+              only: /([1-9][0-9]+|[0-9])\.([1-9][0-9]+|[0-9])\.([1-9][0-9]+|[0-9])-qa\+([0-9]*)\.([a-f0-9]){7}/
+          name: Promote to Preprod
+          requires:
+            - Preprod Approval Notification
+          type: approval
+      - priv-workflow/tag-routing:
+          <<: *tag-routing
+          context: SLACK
+          filters:
+            tags:
+              only: /([1-9][0-9]+|[0-9])\.([1-9][0-9]+|[0-9])\.([1-9][0-9]+|[0-9])-qa\+([0-9]*)\.([a-f0-9]){7}/
+          name: Push Preprod Tag
+          environment: preprod
+          requires:
+            - Promote to Preprod
+      - slack/on-hold:
+          <<: *slack-on-hold
+          name: Prod Approval Notification
+          filters:
+            tags:
+              only: /([1-9][0-9]+|[0-9])\.([1-9][0-9]+|[0-9])\.([1-9][0-9]+|[0-9])-preprod\+([0-9]*)\.([a-f0-9]){7}/
+          requires:
+            - Deploy to <<pipeline.parameters.environment>>
+      - approval:
+          filters:
+            tags:
+              only: /([1-9][0-9]+|[0-9])\.([1-9][0-9]+|[0-9])\.([1-9][0-9]+|[0-9])-preprod\+([0-9]*)\.([a-f0-9]){7}/
+          name: Promote to Production
+          requires:
+            - Prod Approval Notification
+          type: approval
+      - priv-workflow/tag-routing:
+          <<: *tag-routing
+          filters:
+            tags:
+              only: /([1-9][0-9]+|[0-9])\.([1-9][0-9]+|[0-9])\.([1-9][0-9]+|[0-9])-preprod\+([0-9]*)\.([a-f0-9]){7}/
+          name: Push Prod Tag
+          environment: prod
+          requires:
+            - Promote to Production
+      - priv-workflow/tag-routing:
+          <<: *tag-routing
+          filters:
+            tags:
+              only: /([1-9][0-9]+|[0-9])\.([1-9][0-9]+|[0-9])\.([1-9][0-9]+|[0-9])-prod\+([0-9]*)\.([a-f0-9]){7}/
+          name: Push Release Tag
+          environment: release
+          requires:
+            - Deploy to << pipeline.parameters.environment >>
+    when:
+      and:
+        - << pipeline.git.tag >>
+        - << pipeline.parameters.workflow_controller >>

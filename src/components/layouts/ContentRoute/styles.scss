@@ -1,0 +1,11 @@
+.Content {
+  display: flex;
+  flex: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
+  flex-direction: column;
+
+  & > div {
+    width: 100%;
+  }
+}

@@ -1,0 +1,1 @@
+export { MoveAssetsFormContainer } from './MoveAssetsFormContainer';

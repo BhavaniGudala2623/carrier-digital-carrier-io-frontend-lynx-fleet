@@ -1,0 +1,1 @@
+export { AssetsDrawer } from './components';

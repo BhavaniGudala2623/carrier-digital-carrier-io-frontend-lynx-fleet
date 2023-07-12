@@ -1,0 +1,1 @@
+export { AssetHistoryTableTab } from './AssetHistoryTableTab';

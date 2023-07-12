@@ -1,0 +1,9 @@
+.ag-grid-disabled-row {
+  color: #adadad !important;
+  fill: #adadad !important;
+}
+
+.ag-row-even.ag-row-selected,
+.ag-row-odd.ag-row-selected {
+  background: #0038ff14 !important;
+}
